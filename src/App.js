@@ -1,31 +1,44 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { onAuthStateChanged, getIdTokenResult, signOut } from "firebase/auth";
 import { doc, getDoc, getDocs, collection, query, where, onSnapshot } from "firebase/firestore";
 import { auth, db } from "./firebase";
+import Landing from "./pages/Landing";
+import Privacidad from "./pages/Privacidad";
+import Terminos from "./pages/Terminos";
 import Login from "./components/Login";
 import CreateProfile from "./components/CreateProfile";
+import BannerCookies from "./components/BannerCookies";
 import ConvivenciaTest from "./components/ConvivenciaTest";
 import Explorar from "./components/Explorar";
 import MiPerfil from "./components/MiPerfil";
 import Matches from "./components/Matches";
 import AdminPanel from "./components/AdminPanel";
+import Servicios from "./components/Servicios";
+import VerificarEmail from "./pages/VerificarEmail";
 import Navbar from "./components/Navbar";
 import InstallButton from "./components/InstallButton";
 import { useNotifications } from "./hooks/useNotifications";
+import { iniciarPresencia } from "./utils/presencia";
 
 function App() {
+  const presenciaCleanupRef = useRef(null);
+  const [mostrarLogin, setMostrarLogin] = useState(false);
   const [user, setUser]               = useState(null);
   const [profile, setProfile]         = useState(null);
-  const [convivencia, setConvivencia] = useState(null);
   const [loading, setLoading]         = useState(true);
   const [pantalla, setPantalla]       = useState("explorar");
   const [unreadCount, setUnreadCount] = useState(0);
   const [isAdmin, setIsAdmin]         = useState(false);
   const [vistaAdmin, setVistaAdmin]   = useState(false);
   const [suspendido, setSuspendido]   = useState(false);
+  const [screenOpacity, setScreenOpacity] = useState(1);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      if (!currentUser && presenciaCleanupRef.current) {
+        presenciaCleanupRef.current();
+        presenciaCleanupRef.current = null;
+      }
       setUser(currentUser);
       if (currentUser) {
         // Verificar suspensión por UID, email y fingerprint del dispositivo
@@ -48,19 +61,20 @@ function App() {
           return;
         }
 
-        const [profileSnap, convivenciaSnap, tokenResult] = await Promise.all([
+        const [profileSnap, tokenResult] = await Promise.all([
           getDoc(doc(db, "users", currentUser.uid)),
-          getDoc(doc(db, "convivencia", currentUser.uid)),
           getIdTokenResult(currentUser, true),
         ]);
         setProfile(profileSnap.exists() ? profileSnap.data() : null);
-        setConvivencia(convivenciaSnap.exists() ? convivenciaSnap.data() : null);
         setIsAdmin(tokenResult.claims.admin === true);
+        if (!presenciaCleanupRef.current) {
+          presenciaCleanupRef.current = iniciarPresencia(currentUser.uid);
+        }
       } else {
         setProfile(null);
-        setConvivencia(null);
         setIsAdmin(false);
         setVistaAdmin(false);
+        setMostrarLogin(false);
       }
       setLoading(false);
     });
@@ -85,15 +99,33 @@ function App() {
 
   const { NotificationToast } = useNotifications(user);
 
+  const navegarA = (nuevaPantalla) => {
+    setScreenOpacity(0);
+    setTimeout(() => {
+      setPantalla(nuevaPantalla);
+      setScreenOpacity(1);
+    }, 150);
+  };
+
   const recargarPerfil = async () => {
     const snap = await getDoc(doc(db, "users", user.uid));
     setProfile(snap.exists() ? snap.data() : null);
   };
 
   const handleTestCompletado = async () => {
-    const snap = await getDoc(doc(db, "convivencia", user.uid));
-    setConvivencia(snap.exists() ? snap.data() : null);
+    await recargarPerfil();
   };
+
+  // Páginas legales públicas — accesibles sin autenticación
+  const path = window.location.pathname;
+  if (path === "/privacidad") return <Privacidad />;
+  if (path === "/terminos")   return <Terminos />;
+
+  // Ruta de verificación de email (antes del spinner para que no interfiera)
+  if (path === "/verificar-email" && !loading && user &&
+      !user.emailVerified && user.providerData[0]?.providerId === "password") {
+    return <VerificarEmail user={user} />;
+  }
 
   if (loading) {
     return (
@@ -118,11 +150,31 @@ function App() {
     );
   }
 
-  if (!user) return <Login />;
+  if (!user) {
+    if (mostrarLogin) return <Login />;
+    return (
+      <>
+        <Landing onEntrar={() => setMostrarLogin(true)} />
+        <BannerCookies />
+      </>
+    );
+  }
 
-  if (!profile) return <CreateProfile onProfileSaved={recargarPerfil} />;
+  // Usuarios de email/contraseña que aún no verificaron su cuenta
+  if (!user.emailVerified && user.providerData[0]?.providerId === "password") {
+    return <VerificarEmail user={user} />;
+  }
 
-  if (!convivencia) return <ConvivenciaTest onTestCompletado={handleTestCompletado} />;
+  const perfilCompleto = (p) =>
+    p && p.nombre && p.edad && p.sexo && p.ciudad && p.testCompletado === true;
+
+  if (!profile || !profile.nombre || !profile.edad || !profile.sexo || !profile.ciudad) {
+    return <CreateProfile onProfileSaved={recargarPerfil} />;
+  }
+
+  if (!perfilCompleto(profile)) {
+    return <ConvivenciaTest onTestCompletado={handleTestCompletado} />;
+  }
 
   if (vistaAdmin && isAdmin) {
     return <AdminPanel user={user} onClose={() => setVistaAdmin(false)} isAdmin={isAdmin} />;
@@ -130,25 +182,24 @@ function App() {
 
   const renderPantalla = () => {
     switch (pantalla) {
-      case "perfil":   return <MiPerfil profile={profile} onProfileUpdated={recargarPerfil} />;
-      case "matches":  return <Matches />;
-      default:         return <Explorar setPantalla={setPantalla} />;
+      case "perfil":     return <MiPerfil profile={profile} onProfileUpdated={recargarPerfil} />;
+      case "matches":    return <Matches />;
+      case "servicios":  return <Servicios />;
+      default:           return <Explorar setPantalla={navegarA} />;
     }
   };
 
   return (
     <div style={styles.appWrapper}>
-      <div style={styles.screen}>
+      <div style={{ ...styles.screen, opacity: screenOpacity, transition: "opacity 0.15s ease" }}>
         {renderPantalla()}
       </div>
       <Navbar
         pantalla={pantalla}
-        setPantalla={setPantalla}
+        setPantalla={navegarA}
         user={user}
         profile={profile}
         unreadCount={unreadCount}
-        isAdmin={isAdmin}
-        onAdminClick={() => setVistaAdmin(true)}
       />
       <InstallButton />
       {NotificationToast}
