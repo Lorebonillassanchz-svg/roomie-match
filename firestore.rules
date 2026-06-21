@@ -4,5 +4,16 @@ service cloud.firestore {
     match /{document=**} {
       allow read, write: if request.auth != null;
     }
+    // Feedback: cualquiera puede crear (landing pública), solo auth puede leer/editar
+    match /feedback/{docId} {
+      allow create: if true;
+      allow read, update: if request.auth != null;
+    }
+    // Valoraciones: lectura pública; crear/editar solo el propio autor autenticado
+    match /valoraciones/{docId} {
+      allow read: if true;
+      allow create, update: if request.auth != null
+        && request.auth.uid == request.resource.data.autorUid;
+    }
   }
 }

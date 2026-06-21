@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { collection, doc, getDoc, increment, onSnapshot, query, updateDoc, where } from "firebase/firestore";
+import { collection, doc, getDoc, increment, onSnapshot, orderBy, query, updateDoc, where } from "firebase/firestore";
 import { getDownloadURL, ref } from "firebase/storage";
-import { auth, db, storage } from "../firebase";
+import { db, storage } from "../firebase";
+import { getAvatarDefault } from "../utils/avatarDefault";
 
 const LABELS_CONVIVENCIA = {
   horario_acostarse:   "Horario acostarse",
@@ -63,6 +64,7 @@ export default function AdminPanel({ user, onClose, isAdmin }) {
   const [metricModal, setMetricModal] = useState(null); // null | "usuarios" | "nuevos" | "matches" | "test"
   const [reportes, setReportes] = useState([]);
   const [fotoReporteAmpliada, setFotoReporteAmpliada] = useState(null);
+  const [feedback, setFeedback] = useState([]);
 
   // Carga de usuarios — espera a que isAdmin esté confirmado
   useEffect(() => {
@@ -109,7 +111,12 @@ export default function AdminPanel({ user, onClose, isAdmin }) {
       }
     );
 
-    return () => { unsubMatches(); unsubConvivencia(); unsubVerif(); unsubReportes(); };
+    const unsubFeedback = onSnapshot(
+      query(collection(db, "feedback"), orderBy("fecha", "desc")),
+      (snap) => setFeedback(snap.docs.map((d) => ({ id: d.id, ...d.data() })))
+    );
+
+    return () => { unsubMatches(); unsubConvivencia(); unsubVerif(); unsubReportes(); unsubFeedback(); };
   }, [isAdmin]);
 
   const ignorarReporte = async (reporteId) => {
@@ -196,10 +203,7 @@ export default function AdminPanel({ user, onClose, isAdmin }) {
                 <tr key={u.uid} style={s.tr} onClick={() => abrirModal(u)}>
                   <td style={s.td}>
                     <div style={s.tableAvatar}>
-                      {u.photoURL
-                        ? <img src={u.photoURL} alt={u.nombre} style={s.tableAvatarImg} referrerPolicy="no-referrer" />
-                        : <span style={s.tableAvatarLetra}>{u.nombre?.[0]?.toUpperCase() || "?"}</span>
-                      }
+                      <img src={u.photoURL || getAvatarDefault(u.sexo)} alt={u.nombre} style={s.tableAvatarImg} referrerPolicy="no-referrer" />
                     </div>
                   </td>
                   <td style={s.td}>{u.nombre || "—"}</td>
@@ -325,16 +329,60 @@ export default function AdminPanel({ user, onClose, isAdmin }) {
         )}
       </div>
 
+      {/* Feedback recibido */}
+      <div style={s.tableSection}>
+        <h2 style={s.sectionTitle}>Feedback recibido ⭐</h2>
+        {feedback.length === 0 ? (
+          <p style={s.verifVacia}>No hay feedback todavía</p>
+        ) : (
+          <div style={s.tableWrapper}>
+            <table style={s.table}>
+              <thead>
+                <tr>
+                  {["Valoración", "Comentario", "Email", "Origen", "Fecha"].map((col) => (
+                    <th key={col} style={s.th}>{col}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {feedback.map((fb) => (
+                  <tr key={fb.id} style={s.tr}>
+                    <td style={s.td}>
+                      <span style={{ fontSize: "16px" }}>
+                        {"⭐".repeat(Math.min(fb.estrellas || 0, 5))}
+                      </span>
+                    </td>
+                    <td style={{ ...s.td, maxWidth: "260px", whiteSpace: "normal", lineHeight: "1.4" }}>
+                      {fb.comentario || "—"}
+                    </td>
+                    <td style={{ ...s.td, color: "#9ca3af", fontSize: "12px" }}>{fb.email || "—"}</td>
+                    <td style={{ ...s.td, fontSize: "12px" }}>
+                      <span style={{
+                        background: fb.origen === "landing" ? "#eff6ff" : "#f5f3ff",
+                        color: fb.origen === "landing" ? "#1d4ed8" : "#7c3aed",
+                        padding: "2px 8px", borderRadius: "10px", fontWeight: "600", fontSize: "11px",
+                      }}>
+                        {fb.origen || "—"}
+                      </span>
+                    </td>
+                    <td style={{ ...s.td, color: "#9ca3af", fontSize: "12px" }}>
+                      {fmtFechaHora(fb.fecha)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
       {/* Modal detalle usuario */}
       {modalUsuario && (
         <div style={s.modalOverlay} onClick={cerrarModal}>
           <div style={s.modal} onClick={(e) => e.stopPropagation()}>
             <button style={s.modalClose} onClick={cerrarModal}>✕</button>
             <div style={s.modalAvatarWrap}>
-              {modalUsuario.photoURL
-                ? <img src={modalUsuario.photoURL} alt={modalUsuario.nombre} style={s.modalAvatar} referrerPolicy="no-referrer" />
-                : <div style={s.modalAvatarFallback}><span style={{ fontSize: "52px" }}>👤</span></div>
-              }
+              <img src={modalUsuario.photoURL || getAvatarDefault(modalUsuario.sexo)} alt={modalUsuario.nombre} style={s.modalAvatar} referrerPolicy="no-referrer" />
             </div>
             <h2 style={s.modalNombre}>{modalUsuario.nombre}</h2>
             <p style={s.modalEmail}>{modalUsuario.email}</p>
@@ -389,10 +437,7 @@ export default function AdminPanel({ user, onClose, isAdmin }) {
                   {usuarios.map((u) => (
                     <div key={u.uid} style={s.metricRow}>
                       <div style={s.metricAvatar}>
-                        {u.photoURL
-                          ? <img src={u.photoURL} alt={u.nombre} style={s.metricAvatarImg} referrerPolicy="no-referrer" />
-                          : <span style={{ fontSize: "16px" }}>👤</span>
-                        }
+                        <img src={u.photoURL || getAvatarDefault(u.sexo)} alt={u.nombre} style={s.metricAvatarImg} referrerPolicy="no-referrer" />
                       </div>
                       <div style={s.metricRowInfo}>
                         <span style={s.metricRowNombre}>{u.nombre || "—"}</span>
@@ -414,10 +459,7 @@ export default function AdminPanel({ user, onClose, isAdmin }) {
                   {usuariosNuevos.map((u) => (
                     <div key={u.uid} style={s.metricRow}>
                       <div style={s.metricAvatar}>
-                        {u.photoURL
-                          ? <img src={u.photoURL} alt={u.nombre} style={s.metricAvatarImg} referrerPolicy="no-referrer" />
-                          : <span style={{ fontSize: "16px" }}>👤</span>
-                        }
+                        <img src={u.photoURL || getAvatarDefault(u.sexo)} alt={u.nombre} style={s.metricAvatarImg} referrerPolicy="no-referrer" />
                       </div>
                       <div style={s.metricRowInfo}>
                         <span style={s.metricRowNombre}>{u.nombre || "—"}</span>
@@ -467,10 +509,7 @@ export default function AdminPanel({ user, onClose, isAdmin }) {
                     return (
                       <div key={c.uid} style={s.metricRow}>
                         <div style={s.metricAvatar}>
-                          {u.photoURL
-                            ? <img src={u.photoURL} alt={u.nombre} style={s.metricAvatarImg} referrerPolicy="no-referrer" />
-                            : <span style={{ fontSize: "16px" }}>👤</span>
-                          }
+                          <img src={u.photoURL || getAvatarDefault(u.sexo)} alt={u.nombre} style={s.metricAvatarImg} referrerPolicy="no-referrer" />
                         </div>
                         <div style={s.metricRowInfo}>
                           <span style={s.metricRowNombre}>{u.nombre || c.uid}</span>
@@ -530,10 +569,7 @@ function VerifCard({ usuario }) {
     <div style={s.verifCard}>
       <div style={s.verifCardHeader}>
         <div style={s.verifCardAvatar}>
-          {usuario.photoURL
-            ? <img src={usuario.photoURL} alt={usuario.nombre} style={s.verifCardAvatarImg} referrerPolicy="no-referrer" />
-            : <span style={{ fontSize: "24px" }}>👤</span>
-          }
+          <img src={usuario.photoURL || getAvatarDefault(usuario.sexo)} alt={usuario.nombre} style={s.verifCardAvatarImg} referrerPolicy="no-referrer" />
         </div>
         <div>
           <p style={s.verifCardNombre}>{usuario.nombre || "—"}</p>
